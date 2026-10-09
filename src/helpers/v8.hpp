@@ -3,6 +3,9 @@
 #include "v8.h"
 #include "json.hpp"
 #include "ompcapi.h"
+#ifdef _WIN32
+#include <windows.h>
+#endif
 #pragma warning(disable : 4312)
 
 // Parts of this file is taken from altv-js-module, thanks to altv team
@@ -104,7 +107,35 @@ inline bool SafeToString(v8::Local<v8::Value> val, v8::Isolate* isolate, v8::Loc
 	v8::MaybeLocal maybeVal = val->ToString(ctx);
 	if (maybeVal.IsEmpty())
 		return false;
+
+#ifdef _WIN32
+	// Global test: encode all native API string arguments as GBK (CP936).
+	// V8 stores strings as UTF-16, so convert directly without a UTF-8 intermediate.
+	v8::String::Value utf16(isolate, maybeVal.ToLocalChecked());
+	if (*utf16 == nullptr)
+		return false;
+	if (utf16.length() == 0)
+	{
+		out.clear();
+		return true;
+	}
+
+	constexpr UINT clientCodePage = 936;
+	const auto* wide = reinterpret_cast<const wchar_t*>(*utf16);
+	const int byteCount = WideCharToMultiByte(clientCodePage, 0, wide, utf16.length(), nullptr, 0, nullptr, nullptr);
+	if (byteCount == 0)
+		return false;
+
+	out.resize(byteCount);
+	const int written = WideCharToMultiByte(clientCodePage, 0, wide, utf16.length(), &out[0], byteCount, nullptr, nullptr);
+	if (written != byteCount)
+	{
+		out.clear();
+		return false;
+	}
+#else
 	out = *v8::String::Utf8Value(isolate, maybeVal.ToLocalChecked());
+#endif
 	return true;
 }
 
