@@ -3,6 +3,9 @@
 #include "v8.h"
 #include "json.hpp"
 #include "ompcapi.h"
+#include <cstring>
+#include <limits>
+#include <string>
 #ifdef _WIN32
 #include <windows.h>
 #endif
@@ -184,19 +187,47 @@ inline v8::Local<v8::Value> JsonToV8(v8::Isolate* isolate, const nlohmann::json&
 	}
 }
 
+// Global test: decode native strings as GBK (CP936) on Windows.
+inline v8::Local<v8::String> NativeStringToV8(v8::Isolate* isolate, const char* data, size_t length)
+{
+	if (data == nullptr || length == 0)
+		return v8::String::Empty(isolate);
+	if (length > static_cast<size_t>((std::numeric_limits<int>::max)()))
+		return v8::String::Empty(isolate);
+
+#ifdef _WIN32
+	const int byteCount = static_cast<int>(length);
+	const int wideLength = MultiByteToWideChar(936, MB_ERR_INVALID_CHARS, data, byteCount, nullptr, 0);
+	if (wideLength == 0)
+		return v8::String::Empty(isolate);
+
+	std::wstring wide(wideLength, L'\0');
+	if (MultiByteToWideChar(936, MB_ERR_INVALID_CHARS, data, byteCount, &wide[0], wideLength) != wideLength)
+		return v8::String::Empty(isolate);
+
+	v8::Local<v8::String> result;
+	if (!v8::String::NewFromTwoByte(isolate, reinterpret_cast<const uint16_t*>(wide.data()),
+		v8::NewStringType::kNormal, wideLength).ToLocal(&result))
+		return v8::String::Empty(isolate);
+	return result;
+#else
+	return v8::String::NewFromUtf8(isolate, data, v8::NewStringType::kNormal, static_cast<int>(length)).ToLocalChecked();
+#endif
+}
+
 inline v8::Local<v8::String> JSValue(v8::Isolate* isolate, const CAPIStringView& val)
 {
-	return v8::String::NewFromUtf8(isolate, val.data, v8::NewStringType::kNormal, val.len).ToLocalChecked();
+	return NativeStringToV8(isolate, val.data, val.len);
 }
 
 inline v8::Local<v8::String> JSValue(v8::Isolate* isolate, const char* val)
 {
-	return v8::String::NewFromUtf8(isolate, val).ToLocalChecked();
+	return NativeStringToV8(isolate, val, val ? std::strlen(val) : 0);
 }
 
 inline v8::Local<v8::String> JSValue(v8::Isolate* isolate, const Impl::String& val)
 {
-	return v8::String::NewFromUtf8(isolate, val.c_str(), v8::NewStringType::kNormal, (int)val.size()).ToLocalChecked();
+	return NativeStringToV8(isolate, val.data(), val.size());
 }
 
 inline v8::Local<v8::Boolean> JSValue(v8::Isolate* isolate, bool val)
